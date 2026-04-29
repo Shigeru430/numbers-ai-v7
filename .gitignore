@@ -1,0 +1,7 @@
+__pycache__/
+out/
+old/
+logs/
+history/
+debug_html/
+*.log
