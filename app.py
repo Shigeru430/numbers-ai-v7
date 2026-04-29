@@ -2061,7 +2061,7 @@ if not db_file.exists():
     st.info("この .py ファイルと同じフォルダに numbers.db を置いてから再実行してください。")
     st.stop()
 
-latest_check_message = "楽天最新結果チェック：未実行"
+latest_check_message = "最新結果チェック：未実行"
 
 try:
     with st.spinner("numbers.dbを読み込み中..."):
@@ -2081,7 +2081,7 @@ try:
             else:
                 fetched_messages.append(f"{game}: 取得できませんでした")
 
-        latest_check_message = "楽天最新結果チェック：" + " ｜ ".join(fetched_messages)
+        latest_check_message = "最新結果チェック：" + " ｜ ".join(fetched_messages)
 
     with st.spinner("抽選データを統合中..."):
         base_n3 = load_draws(conn, TABLE_N3, 3)
