@@ -2,7 +2,7 @@
 # ============================================================
 # Numbers AI v7
 # UI: app_numbers_v7_pro_fix_full.py ベース
-# DB連携 + 楽天最新結果確認 + 完全自動履歴 + メール送信版 Rakuten v18（AIトレンド状態判定）
+# DB連携 + 楽天最新結果確認 + 完全自動履歴 + メール送信版 Rakuten v19（公開版・メール機能なし）
 #
 # 修正点:
 # 1. 予想回が同じなら予想結果をDB保存済みのものから再表示
@@ -16,11 +16,8 @@ import json
 import re
 import sqlite3
 import textwrap
-import smtplib
 import urllib.request
 from html import unescape
-from email.mime.text import MIMEText
-from email.header import Header
 from datetime import datetime
 from pathlib import Path
 from collections import Counter, defaultdict
@@ -278,30 +275,6 @@ footer {visibility: hidden;}
     font-size: 13px;
     font-weight: 800;
     opacity: .9;
-}
-
-.mail-card {
-    background: #ffffff;
-    border: 1px solid rgba(36,41,56,.12);
-    border-radius: 22px;
-    padding: 24px;
-    box-shadow: 0 14px 34px rgba(15,17,23,.08);
-    margin-top: 20px;
-    margin-bottom: 22px;
-}
-
-.mail-title {
-    font-size: 24px;
-    font-weight: 900;
-    color: #242938;
-    margin-bottom: 8px;
-}
-
-.mail-note {
-    color: #596174;
-    font-size: 14px;
-    line-height: 1.7;
-    margin-bottom: 16px;
 }
 
 .hit-effect-card {
@@ -1490,69 +1463,6 @@ def build_combined_history(
 
 
 # =====================================================
-# メール送信
-# =====================================================
-def build_prediction_mail_body(
-    target_round: int,
-    target_date: str,
-    latest_n3_round: int,
-    latest_n4_round: int,
-    preds_n3: list[str],
-    preds_n4: list[str],
-    latest_check_message: str,
-) -> str:
-    n3_main = " / ".join(preds_n3[:2])
-    n3_keep = " / ".join(preds_n3[2:])
-    n4_main = " / ".join(preds_n4[:2])
-    n4_keep = " / ".join(preds_n4[2:])
-
-    body = f"""Numbers AI v7 予想
-
-予想対象：第{target_round}回
-予想日：{target_date}
-
-【ナンバーズ3】
-🔥 本線：{n3_main}
-○ 抑え：{n3_keep}
-
-【ナンバーズ4】
-🔥 本線：{n4_main}
-○ 抑え：{n4_keep}
-
-【状態】
-最新N3回号：第{latest_n3_round}回
-最新N4回号：第{latest_n4_round}回
-{latest_check_message}
-
-※この予想は同じ抽選回ではDB保存済みの内容を再利用します。
-※購入は自己判断でお願いします。
-"""
-    return body
-
-
-def send_prediction_mail(
-    smtp_host: str,
-    smtp_port: int,
-    smtp_user: str,
-    smtp_password: str,
-    mail_from: str,
-    mail_to: str,
-    subject: str,
-    body: str,
-) -> None:
-    msg = MIMEText(body, "plain", "utf-8")
-    msg["Subject"] = Header(subject, "utf-8")
-    msg["From"] = mail_from
-    msg["To"] = mail_to
-
-    with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
-        server.starttls()
-        server.login(smtp_user, smtp_password)
-        server.send_message(msg)
-
-
-
-# =====================================================
 # 的中演出
 # =====================================================
 def find_latest_evaluated_hit(combined_history: list[dict]) -> dict | None:
@@ -2298,122 +2208,7 @@ with tab1:
     )
     st.markdown(html, unsafe_allow_html=True)
 
-    st.markdown("""
-<div class="mail-card">
-    <div class="mail-title">📩 スマホに予想を送る</div>
-    <div class="mail-note">
-        GmailなどのSMTPを使って、今日の予想を自分のスマホ宛に送信します。<br>
-        Gmailの場合は通常のログインパスワードではなく「アプリパスワード」を使ってください。
-    </div>
-</div>
-""", unsafe_allow_html=True)
 
-    with st.form("mail_send_form"):
-        col_a, col_b = st.columns(2)
-        with col_a:
-            mail_to = st.text_input("送信先メールアドレス（スマホ）", placeholder="example@gmail.com")
-            smtp_user = st.text_input("SMTPユーザー / 送信元メール", placeholder="your@gmail.com")
-            mail_from = st.text_input("From（空ならSMTPユーザーを使用）", placeholder="your@gmail.com")
-        with col_b:
-            smtp_host = st.text_input("SMTPホスト", value="smtp.gmail.com")
-            smtp_port = st.number_input("SMTPポート", min_value=1, max_value=65535, value=587)
-            smtp_password = st.text_input("SMTPパスワード / アプリパスワード", type="password")
-
-        submitted = st.form_submit_button("📨 この予想をスマホに送信")
-
-        if submitted:
-            if not mail_to or not smtp_user or not smtp_password or not smtp_host:
-                st.error("送信先、SMTPユーザー、SMTPパスワード、SMTPホストを入力してください。")
-            else:
-                try:
-                    subject = f"Numbers AI v7 第{target_round}回 予想"
-                    body = build_prediction_mail_body(
-                        target_round=target_round,
-                        target_date=target_date,
-                        latest_n3_round=latest_n3_round,
-                        latest_n4_round=latest_n4_round,
-                        preds_n3=preds_n3,
-                        preds_n4=preds_n4,
-                        latest_check_message=latest_check_message,
-                    )
-
-                    send_prediction_mail(
-                        smtp_host=smtp_host,
-                        smtp_port=int(smtp_port),
-                        smtp_user=smtp_user,
-                        smtp_password=smtp_password,
-                        mail_from=mail_from.strip() or smtp_user,
-                        mail_to=mail_to,
-                        subject=subject,
-                        body=body,
-                    )
-
-                    st.success("スマホ宛に予想メールを送信しました。")
-                    st.text_area("送信内容", value=body, height=260)
-
-                except Exception as e:
-                    st.error("メール送信に失敗しました。SMTP設定やアプリパスワードを確認してください。")
-                    st.exception(e)
-
-
-
-
-    # ===============================
-    # メール設定ガイド
-    # ===============================
-    if "first_mail_use" not in st.session_state:
-        st.session_state.first_mail_use = True
-
-    with st.expander("📖 メール設定ガイド（初めての方はこちら）", expanded=st.session_state.first_mail_use):
-
-        st.markdown("""
-### ■ Gmailで送信する場合（おすすめ）
-
-① Googleアカウントにログイン  
-② 「アプリパスワード」を発行  
-👉 https://myaccount.google.com/apppasswords  
-
-③ 以下を入力してください
-
-- SMTPホスト：smtp.gmail.com  
-- ポート：587  
-- SMTPユーザー：あなたのGmail  
-- パスワード：アプリパスワード  
-
----
-
-### ■ 入力テンプレ（コピペOK）
-
-""")
-
-        st.code("""smtp.gmail.com
-587
-your@gmail.com
-アプリパスワード""")
-
-        st.markdown("""
----
-
-### ■ 注意点
-
-・通常のパスワードは使えません  
-・必ず「アプリパスワード」を使用  
-・2段階認証をONにする必要があります  
-
----
-
-### ■ うまくいかない時
-
-・メールアドレスの入力ミス  
-・アプリパスワードのコピーミス  
-・迷惑メールフォルダ確認  
-
----
-
-💡 一度設定すれば毎日ワンタップで送れます
-""")
-
-    st.session_state.first_mail_use = False
 
 # =====================================================
 # ロジック
@@ -2426,7 +2221,7 @@ with tab2:
         <b>v7は、過去検証で採用した固定順位モデルを使います。</b><br><br>
         Numbers3：AI最適順位 <b>{", ".join(map(str, RANK_N3))}</b><br>
         Numbers4：AI最適順位 <b>{", ".join(map(str, RANK_N4))}</b><br><br>
-        候補数字をスコア順に並べ、指定順位の候補を採用します。<br>表示では上位2つを <b>🔥本線</b>、残り3つを <b>○抑え</b> として分けています。<br>実運用成績は、予想履歴テーブルから未発表回を除外して自動集計します。<br>シミュレーション成績は、同じフォルダに置いた sim_numbers3.csv / sim_numbers4.csv から読み込みます。<br>AI状態トレンドは、直近20回の評価点の変化からホット/クール/フラットを判定します。<br>
+        候補数字をスコア順に並べ、指定順位の候補を採用します。<br>表示では上位2つを <b>🔥本線</b>、残り3つを <b>○抑え</b> として分けています。<br>実運用成績は、予想履歴テーブルから未発表回を除外して自動集計します。<br>シミュレーション成績は、同じフォルダに置いた sim_numbers3.csv / sim_numbers4.csv から読み込みます。<br>AI状態トレンドは、直近20回の評価点の変化からホット/クール/フラットを判定します。<br>公開版では安全性を優先し、メール送信機能は外しています。<br>
         スコアには、長期出現率、直近80回の勢い、冷え数字補正、前回数字からの遷移、
         合計値バランス、ダブル傾向を反映しています。<br><br>
         <b>重要：</b>一度保存された予想は、同じ抽選回であれば再計算せずDB内の予想を表示します。<br>
