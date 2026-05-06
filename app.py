@@ -2,7 +2,7 @@
 # ============================================================
 # Numbers AI v7
 # UI: app_numbers_v7_pro_fix_full.py ベース
-# DB連携 + 楽天最新結果確認 + 完全自動履歴 + メール送信版 Rakuten v19（公開版・メール機能なし）
+# DB連携 + 楽天最新結果確認 + 完全自動履歴 + メール送信版 Rakuten v23（固定反応バナー無効）
 #
 # 修正点:
 # 1. 予想回が同じなら予想結果をDB保存済みのものから再表示
@@ -1506,40 +1506,9 @@ def find_latest_evaluated_hit(combined_history: list[dict]) -> dict | None:
 
 
 def render_hit_effect(effect: dict | None) -> str:
-    if effect is None:
-        return ""
-
-    round_no = effect.get("round", "")
-    date = effect.get("date", "")
-    n3_eval = effect.get("n3_eval", "-")
-    n4_eval = effect.get("n4_eval", "-")
-    n3_hit = display_hit(effect.get("n3_hit", "---"))
-    n4_hit = display_hit(effect.get("n4_hit", "---"))
-
-    if effect.get("level") == "hit":
-        return f"""
-<div class="hit-effect-card">
-    <div class="hit-effect-title">🎉 的中あり！ 🎉</div>
-    <div class="hit-effect-sub">
-        第{round_no}回 {date}<br>
-        N3：{n3_hit} / 評価 {n3_eval}　｜　N4：{n4_hit} / 評価 {n4_eval}
-    </div>
-</div>
-"""
-
-    if effect.get("level") == "near":
-        return f"""
-<div class="near-effect-card">
-    <div class="near-effect-title">✨ 惜しい反応あり ✨</div>
-    <div class="near-effect-sub">
-        第{round_no}回 {date}<br>
-        N3：{n3_hit} / 評価 {n3_eval}　｜　N4：{n4_hit} / 評価 {n4_eval}
-    </div>
-</div>
-"""
-
+    # 公開版では、過去履歴に依存する固定反応バナーは表示しない。
+    # 最新結果DBベースの表示に統一するため、常に空文字を返す。
     return ""
-
 
 
 # =====================================================
@@ -2061,7 +2030,7 @@ if not db_file.exists():
     st.info("この .py ファイルと同じフォルダに numbers.db を置いてから再実行してください。")
     st.stop()
 
-latest_check_message = "最新結果チェック：未実行"
+latest_check_message = "楽天最新結果チェック：未実行"
 
 try:
     with st.spinner("numbers.dbを読み込み中..."):
@@ -2081,7 +2050,7 @@ try:
             else:
                 fetched_messages.append(f"{game}: 取得できませんでした")
 
-        latest_check_message = "最新結果チェック：" + " ｜ ".join(fetched_messages)
+        latest_check_message = "楽天最新結果チェック：" + " ｜ ".join(fetched_messages)
 
     with st.spinner("抽選データを統合中..."):
         base_n3 = load_draws(conn, TABLE_N3, 3)
