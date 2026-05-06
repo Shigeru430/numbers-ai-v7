@@ -2030,14 +2030,14 @@ if not db_file.exists():
     st.info("この .py ファイルと同じフォルダに numbers.db を置いてから再実行してください。")
     st.stop()
 
-latest_check_message = "楽天最新結果チェック：未実行"
+latest_check_message = "最新結果チェック：未実行"
 
 try:
     with st.spinner("numbers.dbを読み込み中..."):
         conn = connect_db(str(db_file))
         ensure_history_table(conn)
 
-    with st.spinner("楽天×宝くじで最新抽選結果を確認中..."):
+    with st.spinner("最新抽選結果を確認中..."):
         fetched_messages = []
         for game, digits in [("N3", 3), ("N4", 4)]:
             rows = parse_rakuten_latest(game, digits)
@@ -2050,7 +2050,7 @@ try:
             else:
                 fetched_messages.append(f"{game}: 取得できませんでした")
 
-        latest_check_message = "楽天最新結果チェック：" + " ｜ ".join(fetched_messages)
+        latest_check_message = "最新結果チェック：" + " ｜ ".join(fetched_messages)
 
     with st.spinner("抽選データを統合中..."):
         base_n3 = load_draws(conn, TABLE_N3, 3)
