@@ -139,23 +139,19 @@ def generate_predictions(hist,digits,ranks):
     return [scored[r-1][0] for r in ranks]
 
 def judge(preds,actual):
-    if actual in [None,'','---','-']: return '-'
+    if actual in [None,'','---','-']:
+        return '-'
+
     hit=str(actual)
+
     for p in preds:
-        p=str(p)
-        if p==hit: return '◎'
-        if sorted(p)==sorted(hit): return '〇'
-    best_pos=0; best_digit=0
+        if str(p)==hit:
+            return '◎'
+
     for p in preds:
-        p=str(p); best_pos=max(best_pos,sum(1 for a,b in zip(p,hit) if a==b))
-        chars=list(hit); dm=0
-        for ch in p:
-            if ch in chars: dm+=1; chars.remove(ch)
-        best_digit=max(best_digit,dm)
-    if len(hit)==3 and best_pos>=2: return '▲'
-    if len(hit)==4 and best_pos>=3: return '▲'
-    if best_digit>=2: return '△'
-    if best_digit>=1: return '※'
+        if sorted(str(p))==sorted(hit):
+            return '〇'
+
     return '×'
 
 def saved_prediction(conn,game,target_round):

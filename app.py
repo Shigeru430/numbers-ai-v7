@@ -1171,6 +1171,12 @@ def generate_v7_predictions_cached(history_numbers_tuple: tuple[str, ...], digit
 # 評価ロジック
 # =====================================================
 def judge_prediction(pred_list: list[str], actual: str | None) -> str:
+    """Evaluation rule:
+    ◎ = exact straight hit
+    〇 = box hit (same digits/multiplicity, different order)
+    × = miss
+    - = not drawn / no result
+    """
     if actual in [None, "", "---", "-"]:
         return "-"
 
@@ -1178,42 +1184,13 @@ def judge_prediction(pred_list: list[str], actual: str | None) -> str:
 
     for pred in pred_list:
         pred = str(pred)
-
         if pred == hit:
             return "◎"
 
-        if sorted(pred) == sorted(hit):
-            return "〇"
-
-    best_pos_match = 0
-    best_digit_match = 0
-
     for pred in pred_list:
         pred = str(pred)
-        pos_match = sum(1 for a, b in zip(pred, hit) if a == b)
-
-        hit_chars = list(hit)
-        digit_match = 0
-
-        for ch in pred:
-            if ch in hit_chars:
-                digit_match += 1
-                hit_chars.remove(ch)
-
-        best_pos_match = max(best_pos_match, pos_match)
-        best_digit_match = max(best_digit_match, digit_match)
-
-    if len(hit) == 3 and best_pos_match >= 2:
-        return "▲"
-
-    if len(hit) == 4 and best_pos_match >= 3:
-        return "▲"
-
-    if best_digit_match >= 2:
-        return "△"
-
-    if best_digit_match >= 1:
-        return "※"
+        if sorted(pred) == sorted(hit):
+            return "〇"
 
     return "×"
 
@@ -1222,9 +1199,6 @@ def eval_color(mark: str) -> str:
     return {
         "◎": "#00ffc6",
         "〇": "#5ee7ff",
-        "▲": "#ffd166",
-        "△": "#ff9f43",
-        "※": "#b8b8ff",
         "×": "#777777",
         "-": "#999999",
     }.get(mark, "#ffffff")
@@ -1234,10 +1208,7 @@ def eval_label(mark: str) -> str:
     return {
         "◎": "ストレート的中",
         "〇": "ボックス的中",
-        "▲": "位置一致",
-        "△": "数字一致",
-        "※": "一部一致",
-        "×": "該当なし",
+        "×": "ハズレ",
         "-": "未抽選",
     }.get(mark, "")
 
@@ -1466,34 +1437,17 @@ def build_combined_history(
 # 的中演出
 # =====================================================
 def find_latest_evaluated_hit(combined_history: list[dict]) -> dict | None:
-    """
-    最新の評価済み履歴から演出対象を探す。
-    ◎ or 〇 があれば強演出。
-    ▲ or △ は軽い惜しい演出。
-    ※ / × / - は演出なし。
-    """
+    """Return the latest evaluated ◎/〇 result. Near-hit categories are no longer used."""
     for h in combined_history:
         n3_eval = h.get("n3_eval", "-")
         n4_eval = h.get("n4_eval", "-")
 
-        # 未発表回はスキップ
         if n3_eval == "-" and n4_eval == "-":
             continue
 
         if n3_eval in ["◎", "〇"] or n4_eval in ["◎", "〇"]:
             return {
                 "level": "hit",
-                "round": h.get("round"),
-                "date": h.get("date", ""),
-                "n3_eval": n3_eval,
-                "n4_eval": n4_eval,
-                "n3_hit": h.get("n3_hit", "---"),
-                "n4_hit": h.get("n4_hit", "---"),
-            }
-
-        if n3_eval in ["▲", "△"] or n4_eval in ["▲", "△"]:
-            return {
-                "level": "near",
                 "round": h.get("round"),
                 "date": h.get("date", ""),
                 "n3_eval": n3_eval,
@@ -1529,25 +1483,23 @@ def calc_eval_stats(combined_history: list[dict], key_prefix: str) -> dict:
         return {
             "total": 0,
             "straight": 0,
-            "box": 0,
-            "effective": 0,
+            "box_only": 0,
+            "box_total": 0,
             "straight_rate": None,
-            "hit_rate": None,
-            "effective_rate": None,
+            "box_rate": None,
         }
 
     straight = sum(1 for x in evaluated if x == "◎")
-    box = sum(1 for x in evaluated if x in ["◎", "〇"])
-    effective = sum(1 for x in evaluated if x in ["◎", "〇", "▲", "△"])
+    box_only = sum(1 for x in evaluated if x == "〇")
+    box_total = straight + box_only
 
     return {
         "total": total,
         "straight": straight,
-        "box": box,
-        "effective": effective,
+        "box_only": box_only,
+        "box_total": box_total,
         "straight_rate": straight / total,
-        "hit_rate": box / total,
-        "effective_rate": effective / total,
+        "box_rate": box_total / total,
     }
 
 
@@ -1555,6 +1507,49 @@ def fmt_rate(value) -> str:
     if value is None:
         return "集計中"
     return f"{value * 100:.1f}%"
+
+
+def calc_eval_stats_from_db(conn: sqlite3.Connection, game: str) -> dict:
+    """実運用成績は prediction_history_v7 の発表済み全履歴を対象に集計する。
+    画面の履歴表示件数 (HISTORY_LIMIT) とは独立させる。
+    """
+    rows = conn.execute(f"""
+        SELECT pred_json, actual_number
+        FROM {HISTORY_TABLE}
+        WHERE game = ?
+          AND actual_number IS NOT NULL
+          AND TRIM(actual_number) NOT IN ('', '---', '-')
+        ORDER BY target_round ASC
+    """, (game,)).fetchall()
+
+    total = 0
+    straight = 0
+    box_only = 0
+
+    for row in rows:
+        try:
+            preds = json.loads(row["pred_json"])
+        except Exception:
+            preds = []
+
+        mark = judge_prediction(preds, row["actual_number"])
+        total += 1
+
+        if mark == "◎":
+            straight += 1
+        elif mark == "〇":
+            box_only += 1
+
+    box_total = straight + box_only
+
+    return {
+        "total": total,
+        "straight": straight,
+        "box_only": box_only,
+        "box_total": box_total,
+        "straight_rate": straight / total if total else None,
+        "box_rate": box_total / total if total else None,
+    }
 
 
 
@@ -1567,12 +1562,7 @@ def normalize_hit_type(value) -> str:
     if s in ["box", "ボックス", "〇", "○"]:
         return "box"
 
-    if s in ["near", "position", "▲"]:
-        return "near"
-
-    if s in ["partial", "△", "※"]:
-        return "partial"
-
+    # ▲ / △ / ※ and old near/partial classes are no longer hits.
     return "none"
 
 
@@ -1621,17 +1611,14 @@ def calc_sim_stats(path: str) -> dict | None:
     straight = int((hit_types == "straight").sum())
     box_only = int((hit_types == "box").sum())
     box_total = straight + box_only
-    effective = int(hit_types.isin(["straight", "box", "near", "partial"]).sum())
 
     return {
         "total": total,
         "straight": straight,
         "box_total": box_total,
-        "effective": effective,
         "straight_rate": straight / total if total else None,
         "box_rate": box_total / total if total else None,
-         "effective_rate": effective / total if total else None,
-        "total_picks": total_picks,
+         "total_picks": total_picks,
         "picks_per_row": picks_per_row,
         "straight_rate_pick": (straight / total_picks) if total_picks else None,
         "box_rate_pick": (box_total / total_picks) if total_picks else None,
@@ -1692,47 +1679,41 @@ def render_simulation_dashboard() -> str:
     return html
 
 
-def render_winrate_dashboard(combined_history: list[dict]) -> str:
-    """
-    実運用成績パネル。
-    重要：Streamlitのmarkdownはインデント付きHTMLをコード扱いすることがあるため、
-    すべて行頭空白なしの文字列連結で返す。
-    """
-    n3 = calc_eval_stats(combined_history, "n3")
-    n4 = calc_eval_stats(combined_history, "n4")
+def render_winrate_dashboard(conn: sqlite3.Connection) -> str:
+    """実運用成績は発表済みの全予想履歴から集計する。履歴表示30件制限の影響を受けない。"""
+    n3 = calc_eval_stats_from_db(conn, "N3")
+    n4 = calc_eval_stats_from_db(conn, "N4")
 
     return (
         '<div class="stats-panel">'
         '<div class="stats-title">📊 実運用成績</div>'
         '<div class="stats-sub">'
-        'prediction_history_v7 に保存された予想履歴から自動集計しています。未発表回は集計対象外です。'
+        'prediction_history_v7 の発表済み全履歴から自動集計しています。未発表回は集計対象外です。'
         '</div>'
         '<div class="stats-grid">'
         '<div class="stat-card">'
-        '<div class="stat-label">N3 的中率（◎＋〇）</div>'
-        f'<div class="stat-value-hot">{fmt_rate(n3["hit_rate"])}</div>'
-        f'<div class="stat-small">対象 {n3["total"]} 回</div>'
+        '<div class="stat-label">N3 ストレート的中率</div>'
+        f'<div class="stat-value-hot">{fmt_rate(n3["straight_rate"])}</div>'
+        f'<div class="stat-small">◎ {n3["straight"]} / 対象 {n3["total"]} 回</div>'
         '</div>'
         '<div class="stat-card">'
-        '<div class="stat-label">N3 有効反応（▲以上）</div>'
-        f'<div class="stat-value-warm">{fmt_rate(n3["effective_rate"])}</div>'
-        f'<div class="stat-small">◎ {n3["straight"]} / ◎〇 {n3["box"]}</div>'
+        '<div class="stat-label">N3 BOX的中率（◎＋〇）</div>'
+        f'<div class="stat-value-warm">{fmt_rate(n3["box_rate"])}</div>'
+        f'<div class="stat-small">◎ {n3["straight"]} / 〇 {n3["box_only"]} / 対象 {n3["total"]} 回</div>'
         '</div>'
         '<div class="stat-card">'
-        '<div class="stat-label">N4 的中率（◎＋〇）</div>'
-        f'<div class="stat-value-hot">{fmt_rate(n4["hit_rate"])}</div>'
-        f'<div class="stat-small">対象 {n4["total"]} 回</div>'
+        '<div class="stat-label">N4 ストレート的中率</div>'
+        f'<div class="stat-value-hot">{fmt_rate(n4["straight_rate"])}</div>'
+        f'<div class="stat-small">◎ {n4["straight"]} / 対象 {n4["total"]} 回</div>'
         '</div>'
         '<div class="stat-card">'
-        '<div class="stat-label">N4 有効反応（▲以上）</div>'
-        f'<div class="stat-value-warm">{fmt_rate(n4["effective_rate"])}</div>'
-        f'<div class="stat-small">◎ {n4["straight"]} / ◎〇 {n4["box"]}</div>'
+        '<div class="stat-label">N4 BOX的中率（◎＋〇）</div>'
+        f'<div class="stat-value-warm">{fmt_rate(n4["box_rate"])}</div>'
+        f'<div class="stat-small">◎ {n4["straight"]} / 〇 {n4["box_only"]} / 対象 {n4["total"]} 回</div>'
         '</div>'
         '</div>'
-        ''
         '</div>'
     )
-
 
 
 # =====================================================
@@ -1741,16 +1722,10 @@ def render_winrate_dashboard(combined_history: list[dict]) -> str:
 def eval_score_from_value(value) -> int:
     s = str(value).strip().lower()
 
-    # mark列優先想定
+    # New 2-level evaluation only.
     if s in ["◎", "straight"]:
-        return 5
-    if s in ["〇", "○", "box"]:
-        return 4
-    if s in ["▲", "near", "position"]:
-        return 3
-    if s in ["△", "partial"]:
         return 2
-    if s in ["※", "one"]:
+    if s in ["〇", "○", "box"]:
         return 1
 
     return 0
@@ -1896,7 +1871,7 @@ def render_ai_trend_dashboard() -> str:
         '<div class="ai-state-panel">'
         '<div class="ai-state-title">🎯 AI状態トレンド</div>'
         '<div class="ai-state-sub">'
-        '◎=5点、〇=4点、▲=3点、△=2点、※=1点、×=0点として直近20回の前半/後半を比較します。'
+        '◎=2点、〇=1点、×=0点として直近20回の前半/後半を比較します。'
         '</div>'
         '<div class="ai-state-grid">'
         + card("Numbers3", n3)
@@ -2165,7 +2140,7 @@ with tab1:
 </div>
 """, unsafe_allow_html=True)
 
-    st.markdown(render_winrate_dashboard(combined_history), unsafe_allow_html=True)
+    st.markdown(render_winrate_dashboard(conn), unsafe_allow_html=True)
     st.markdown(render_simulation_dashboard(), unsafe_allow_html=True)
     st.markdown(render_ai_trend_dashboard(), unsafe_allow_html=True)
 
