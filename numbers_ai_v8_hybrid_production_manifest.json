@@ -1,0 +1,30 @@
+{
+  "tool": "Numbers AI v8 Hybrid Production Overlay Repair v2",
+  "status": "PASS",
+  "production_contract": {
+    "N3": "V8_REPEAT_PENALTY_BOX_CLASS_TOP5",
+    "N4": "V7_FIXED_RANK_UNCHANGED"
+  },
+  "matched_generators": {
+    "app.py": "generate_v7_predictions_cached",
+    "update_prediction_history_v2.py": "generate_predictions",
+    "build_sim_numbers_v7.py": "generate_v7_predictions"
+  },
+  "backup_dir": "archive\\numbers_ai_v8_hybrid_production_v2\\20260823_212638",
+  "changed_files": [
+    "app.py",
+    "update_prediction_history_v2.py",
+    "build_sim_numbers_v7.py"
+  ],
+  "before_sha256": {
+    "app.py": "62b2dcee15a2317d1e4d26ef178a7bd5dd8f56fd4d1d8ce7d4f13f23ae062e8a",
+    "update_prediction_history_v2.py": "18fa562c1c4e0bf430edbd970016379900571acb49381dbc5a294f145d0f0c17",
+    "build_sim_numbers_v7.py": "8eccbc2213dea26f739311f0237699d1932e8850fd66bdcbda6d25b3789b5fc9"
+  },
+  "after_sha256": {
+    "app.py": "0ccf4594934e1e214b3fe9dd354af4be7479ed1137eb5f9fc031bab89a0a28b6",
+    "update_prediction_history_v2.py": "75e8bda22fb13334b456ff25df24206f8e5e10912bee0ee3bb38d270d1f20e40",
+    "build_sim_numbers_v7.py": "f76f7ae622274b79e56d1037f4c60de54861e7861bda1f1cbfda70eb32375eb0"
+  },
+  "failed_checks": []
+}

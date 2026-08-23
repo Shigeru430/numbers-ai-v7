@@ -1,3 +1,5 @@
+from numbers_ai_v8_hybrid_core import generate_hybrid_predictions
+# Numbers AI v8 Hybrid Production Overlay v2
 # build_sim_numbers_v7.py
 # ============================================================
 # Numbers AI v7 シミュレーションCSV自動生成スクリプト
@@ -24,15 +26,18 @@
 import argparse
 import itertools
 import re
+import math
 import sqlite3
 from collections import Counter, defaultdict
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 
 
 TABLE_N3 = "numbers3_enriched"
 TABLE_N4 = "numbers4_enriched"
+AUTO_DRAW_TABLE = "auto_draw_results"
 
 RANK_N3 = [4, 5, 9, 11, 20]
 RANK_N4 = [3, 6, 7, 9, 17]
@@ -72,19 +77,28 @@ def find_col(columns: list[str], aliases: list[str]) -> str | None:
 
 
 def normalize_number(value, digits: int) -> str | None:
-    if value is None:
+    """Normalize Numbers values safely. Integer-like floats such as 413.0 become 413, not 4130."""
+    if value is None or isinstance(value, bool):
         return None
-
-    s = str(value).strip()
-    if s in ["", "nan", "None", "NaN", "---", "-"]:
+    if isinstance(value, int):
+        s = str(value)
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        s = str(int(value))
+    else:
+        s = str(value).strip()
+        if s in ["", "nan", "None", "NaN", "---", "-"]:
+            return None
+        m = re.fullmatch(r"([+-]?\d+)\.0+", s)
+        if m:
+            s = m.group(1)
+        if not re.fullmatch(r"[+-]?\d+", s):
+            return None
+    s = s.lstrip("+")
+    if s.startswith("-") or len(s) > digits:
         return None
-
-    s = re.sub(r"\D", "", s)
-    if not s:
-        return None
-
-    return s.zfill(digits)[-digits:]
-
+    return s.zfill(digits)
 
 def normalize_round(value) -> int | None:
     if value is None:
@@ -188,6 +202,36 @@ def load_draws(conn: sqlite3.Connection, table_name: str, digits: int) -> pd.Dat
     return out
 
 
+def load_auto_draws(conn: sqlite3.Connection, game: str, digits: int) -> pd.DataFrame:
+    if not table_exists(conn, AUTO_DRAW_TABLE):
+        return pd.DataFrame(columns=["round", "date", "number", "source"])
+    df = pd.read_sql_query(
+        f"SELECT draw_round AS round, draw_date AS date, number, source FROM {AUTO_DRAW_TABLE} WHERE game = ?",
+        conn, params=(game,),
+    )
+    if df.empty:
+        return pd.DataFrame(columns=["round", "date", "number", "source"])
+    df["round"] = pd.to_numeric(df["round"], errors="coerce")
+    df["date"] = df["date"].fillna("").apply(normalize_date)
+    df["number"] = df["number"].apply(lambda x: normalize_number(x, digits))
+    df["source"] = df["source"].fillna("auto_draw_results")
+    df = df.dropna(subset=["round", "number"]).copy()
+    df["round"] = df["round"].astype(int)
+    return df[["round", "date", "number", "source"]]
+
+
+def merge_draws(base: pd.DataFrame, auto: pd.DataFrame) -> pd.DataFrame:
+    base = base.copy()
+    base["source"] = "db"
+    merged = pd.concat([base, auto], ignore_index=True)
+    merged["_priority"] = merged["source"].apply(lambda x: 2 if x == "rakuten" else 1)
+    return (merged.sort_values(["round", "_priority"])
+            .drop_duplicates("round", keep="last")
+            .drop(columns=["_priority"])
+            .sort_values("round")
+            .reset_index(drop=True))
+
+
 # =====================================================
 # v7予想ロジック
 # =====================================================
@@ -277,80 +321,55 @@ def candidate_score_fast(candidate: str, stats: dict) -> float:
     return score
 
 
+_CANDIDATE_CACHE = {}
+
+def _candidate_universe(digits: int):
+    cached = _CANDIDATE_CACHE.get(digits)
+    if cached is not None:
+        return cached
+
+    n = 10 ** digits
+    nums = np.arange(n, dtype=np.int32)
+    divs = (10 ** np.arange(digits - 1, -1, -1)).astype(np.int32)
+    digit_matrix = ((nums[:, None] // divs[None, :]) % 10).astype(np.int8)
+    strings = np.array([str(i).zfill(digits) for i in range(n)], dtype=object)
+    digit_sums = digit_matrix.sum(axis=1).astype(np.float64)
+
+    repeat_bonus = np.zeros(n, dtype=np.float64)
+    for i in range(n):
+        counts = np.bincount(digit_matrix[i], minlength=10)
+        vals = counts[counts > 0]
+        if digits == 3:
+            if np.any(vals == 2):
+                repeat_bonus[i] += 4.5
+            if np.any(vals == 3):
+                repeat_bonus[i] += 1.2
+        else:
+            if np.any(vals == 2):
+                repeat_bonus[i] += 4.0
+            if np.any(vals == 3):
+                repeat_bonus[i] += 2.2
+            if np.any(vals == 4):
+                repeat_bonus[i] -= 1.0
+
+    cached = (strings, digit_matrix, digit_sums, repeat_bonus)
+    _CANDIDATE_CACHE[digits] = cached
+    return cached
+
+
 def generate_v7_predictions(history_numbers: list[str], digits: int, ranks: list[int]) -> list[str]:
-    stats = build_stats(history_numbers, digits)
-
-    max_num = 10 ** digits
-    scored = []
-
-    for i in range(max_num):
-        c = str(i).zfill(digits)
-        scored.append((c, candidate_score_fast(c, stats)))
-
-    scored.sort(key=lambda x: (-x[1], x[0]))
-
-    picks = []
-    for r in ranks:
-        idx = r - 1
-        if 0 <= idx < len(scored):
-            picks.append(scored[idx][0])
-
-    return picks
-
+    return generate_hybrid_predictions(history_numbers, digits, ranks)
 
 # =====================================================
 # 判定
 # =====================================================
 def judge_hit_type(pred_list: list[str], actual: str) -> tuple[str, str]:
-    """
-    app側の評価に合わせる。
-    戻り値:
-      hit_type, mark
-    """
     hit = str(actual)
-
-    for pred in pred_list:
-        pred = str(pred)
-
-        if pred == hit:
-            return "straight", "◎"
-
-        if sorted(pred) == sorted(hit):
-            return "box", "〇"
-
-    best_pos_match = 0
-    best_digit_match = 0
-
-    for pred in pred_list:
-        pred = str(pred)
-
-        pos_match = sum(1 for a, b in zip(pred, hit) if a == b)
-
-        hit_chars = list(hit)
-        digit_match = 0
-
-        for ch in pred:
-            if ch in hit_chars:
-                digit_match += 1
-                hit_chars.remove(ch)
-
-        best_pos_match = max(best_pos_match, pos_match)
-        best_digit_match = max(best_digit_match, digit_match)
-
-    if len(hit) == 3 and best_pos_match >= 2:
-        return "near", "▲"
-
-    if len(hit) == 4 and best_pos_match >= 3:
-        return "near", "▲"
-
-    if best_digit_match >= 2:
-        return "partial", "△"
-
-    if best_digit_match >= 1:
-        return "partial", "※"
-
+    if any(str(pred) == hit for pred in pred_list):
+        return "straight", "◎"
+    if any(sorted(str(pred)) == sorted(hit) for pred in pred_list):
+        return "box", "〇"
     return "none", "×"
-
 
 # =====================================================
 # シミュレーション
@@ -405,22 +424,15 @@ def simulate(
 
 def print_summary(name: str, df: pd.DataFrame) -> None:
     total = len(df)
-
     straight = int((df["hit_type"] == "straight").sum())
     box_total = int(df["hit_type"].isin(["straight", "box"]).sum())
-    effective = int(df["hit_type"].isin(["straight", "box", "near", "partial"]).sum())
-
     print(f"\n=== {name} summary ===")
     print(f"rows          = {total}")
     print(f"straight_hits = {straight}")
     print(f"box_hits      = {box_total}")
-    print(f"effective     = {effective}")
-
     if total:
         print(f"straight_rate = {straight / total:.4%}")
         print(f"box_rate      = {box_total / total:.4%}")
-        print(f"effective_rate= {effective / total:.4%}")
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -446,7 +458,8 @@ def main() -> None:
     conn = connect_db(str(db_path))
 
     print("\n=== load numbers3 ===")
-    draws_n3 = load_draws(conn, TABLE_N3, 3)
+    base_n3 = load_draws(conn, TABLE_N3, 3)
+    draws_n3 = merge_draws(base_n3, load_auto_draws(conn, "N3", 3))
     print(f"N3 rows = {len(draws_n3)}")
     print(f"N3 round range = {draws_n3['round'].min()} - {draws_n3['round'].max()}")
 
@@ -460,7 +473,8 @@ def main() -> None:
     )
 
     print("\n=== load numbers4 ===")
-    draws_n4 = load_draws(conn, TABLE_N4, 4)
+    base_n4 = load_draws(conn, TABLE_N4, 4)
+    draws_n4 = merge_draws(base_n4, load_auto_draws(conn, "N4", 4))
     print(f"N4 rows = {len(draws_n4)}")
     print(f"N4 round range = {draws_n4['round'].min()} - {draws_n4['round'].max()}")
 

@@ -1,3 +1,5 @@
+from numbers_ai_v8_hybrid_core import generate_hybrid_predictions
+# Numbers AI v8 Hybrid Production Overlay v2
 # app_numbers_v7_pro_db_history_rakuten_v13_simulation_stats.py
 # ============================================================
 # Numbers AI v7
@@ -14,6 +16,7 @@
 
 import json
 import re
+import math
 import sqlite3
 import textwrap
 import urllib.request
@@ -29,7 +32,7 @@ import streamlit as st
 # =====================================================
 # 基本設定
 # =====================================================
-APP_TITLE = "Numbers AI v7"
+APP_TITLE = "Numbers AI v8 Hybrid"
 DEFAULT_DB_PATH = "numbers.db"
 
 TABLE_N3 = "numbers3_enriched"
@@ -762,19 +765,28 @@ def find_col(columns: list[str], aliases: list[str]) -> str | None:
 
 
 def normalize_number(value, digits: int) -> str | None:
-    if value is None:
+    """Normalize Numbers values safely. Integer-like floats such as 413.0 become 413, not 4130."""
+    if value is None or isinstance(value, bool):
         return None
-
-    s = str(value).strip()
-    if s in ["", "nan", "None", "NaN", "---", "-"]:
+    if isinstance(value, int):
+        s = str(value)
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        s = str(int(value))
+    else:
+        s = str(value).strip()
+        if s in ["", "nan", "None", "NaN", "---", "-"]:
+            return None
+        m = re.fullmatch(r"([+-]?\d+)\.0+", s)
+        if m:
+            s = m.group(1)
+        if not re.fullmatch(r"[+-]?\d+", s):
+            return None
+    s = s.lstrip("+")
+    if s.startswith("-") or len(s) > digits:
         return None
-
-    s = re.sub(r"\D", "", s)
-    if not s:
-        return None
-
-    return s.zfill(digits)[-digits:]
-
+    return s.zfill(digits)
 
 def load_draws(conn: sqlite3.Connection, table_name: str, digits: int) -> pd.DataFrame:
     if not table_exists(conn, table_name):
@@ -1145,26 +1157,7 @@ def candidate_score_fast(candidate: str, stats: dict) -> float:
 
 @st.cache_data(show_spinner=False)
 def generate_v7_predictions_cached(history_numbers_tuple: tuple[str, ...], digits: int, ranks_tuple: tuple[int, ...]) -> list[str]:
-    history_numbers = list(history_numbers_tuple)
-    ranks = list(ranks_tuple)
-    stats = build_stats(history_numbers, digits)
-
-    max_num = 10 ** digits
-    scored = []
-
-    for i in range(max_num):
-        c = str(i).zfill(digits)
-        scored.append((c, candidate_score_fast(c, stats)))
-
-    scored.sort(key=lambda x: (-x[1], x[0]))
-
-    picks = []
-    for r in ranks:
-        idx = r - 1
-        if 0 <= idx < len(scored):
-            picks.append(scored[idx][0])
-
-    return picks
+    return generate_hybrid_predictions(list(history_numbers_tuple), digits, list(ranks_tuple))
 
 
 # =====================================================

@@ -1,3 +1,5 @@
+from numbers_ai_v8_hybrid_core import generate_hybrid_predictions
+# Numbers AI v8 Hybrid Production Overlay v2
 # update_prediction_history_v2.py
 # Numbers AI v8 operation: update prediction_history_v7 without opening Streamlit.
 
@@ -51,12 +53,21 @@ def find_col(cols, aliases):
     return None
 
 def normalize_number(v,digits):
-    if v is None: return None
-    s=str(v).strip()
-    if s in ['', 'nan', 'None', 'NaN', '---', '-']: return None
-    s=re.sub(r'\D','',s)
-    if not s: return None
-    return s.zfill(digits)[-digits:]
+    if v is None or isinstance(v,bool): return None
+    if isinstance(v,int):
+        s=str(v)
+    elif isinstance(v,float):
+        if not math.isfinite(v) or not v.is_integer(): return None
+        s=str(int(v))
+    else:
+        s=str(v).strip()
+        if s in ['', 'nan', 'None', 'NaN', '---', '-']: return None
+        m=re.fullmatch(r'([+-]?\d+)\.0+',s)
+        if m: s=m.group(1)
+        if not re.fullmatch(r'[+-]?\d+',s): return None
+    s=s.lstrip('+')
+    if s.startswith('-') or len(s)>digits: return None
+    return s.zfill(digits)
 
 def load_draws(conn, table, digits):
     if not table_exists(conn,table): raise RuntimeError(f'table not found: {table}')
@@ -131,12 +142,8 @@ def candidate_score(c,st):
     if st['avg_sum'] is not None: score-=abs(sum(int(x) for x in c)-st['avg_sum'])*0.22
     return score
 
-def generate_predictions(hist,digits,ranks):
-    st=build_stats(hist,digits); scored=[]
-    for i in range(10**digits):
-        c=str(i).zfill(digits); scored.append((c,candidate_score(c,st)))
-    scored.sort(key=lambda x:(-x[1],x[0]))
-    return [scored[r-1][0] for r in ranks]
+def generate_predictions(history_numbers: list[str], digits: int, ranks: list[int]) -> list[str]:
+    return generate_hybrid_predictions(history_numbers, digits, ranks)
 
 def judge(preds,actual):
     if actual in [None,'','---','-']:
