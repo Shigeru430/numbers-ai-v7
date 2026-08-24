@@ -16,6 +16,7 @@
 
 import argparse
 import re
+import math
 import sqlite3
 import urllib.request
 from datetime import datetime
@@ -56,19 +57,28 @@ def ensure_auto_draw_table(conn: sqlite3.Connection) -> None:
 
 
 def normalize_number(value, digits: int) -> str | None:
-    if value is None:
+    """Normalize Numbers values safely. Integer-like floats such as 413.0 become 413, not 4130."""
+    if value is None or isinstance(value, bool):
         return None
-
-    s = str(value).strip()
-    if not s or s.lower() == "nan":
+    if isinstance(value, int):
+        s = str(value)
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        s = str(int(value))
+    else:
+        s = str(value).strip()
+        if s in ["", "nan", "None", "NaN", "---", "-"]:
+            return None
+        m = re.fullmatch(r"([+-]?\d+)\.0+", s)
+        if m:
+            s = m.group(1)
+        if not re.fullmatch(r"[+-]?\d+", s):
+            return None
+    s = s.lstrip("+")
+    if s.startswith("-") or len(s) > digits:
         return None
-
-    s = re.sub(r"\D", "", s)
-    if not s:
-        return None
-
-    return s.zfill(digits)[-digits:]
-
+    return s.zfill(digits)
 
 def normalize_date(value) -> str:
     if value is None:
